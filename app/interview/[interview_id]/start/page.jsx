@@ -5,6 +5,10 @@ import Image from 'next/image';
 import React, { useContext, useEffect, useState } from 'react'
 import Vapi from '@vapi-ai/web';
 import AlertConformation from './_components/AlertConformation';
+import axios from 'axios';
+import { toast } from 'react-hot-toast';
+import { supabase } from '@/services/supabaseClient';
+import { useParams, useRouter } from 'next/navigation';
 
 
 function StartInterview() {
@@ -12,6 +16,9 @@ function StartInterview() {
     const { interviewInfo, setInterviewInfo } = useContext(InterviewDataContext);
     const vapi = new Vapi(process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY);
     const [activeUser, setActiveUser] = useState(false);
+    const [conversation, setConversation] = useState([]);
+    const { interview_id } = useParams();
+    const router = useRouter();
 
     useEffect(() => {
         interviewInfo && startCall();
@@ -78,25 +85,72 @@ function StartInterview() {
         vapi.stop();
     }
 
-    vapi.on("call-start", () => {
-        console.log("Assistant Call Started");
-        toast('call connected...')
-    })
+    useEffect(() => {
+        const handleMessage = (message) => {
+            console.log("message", message);
+            if (message?.conversation) {
+                const convoString = JSON.stringify(message?.conversation);
+                console.log("conversation String", convoString);
+                setConversation(convoString);
+            }
+        }
 
-    vapi.on("speech-start", () => {
-        console.log("Assistant speech started");
-        setActiveUser(false);
-    })
+        vapi.on("message", handleMessage);
+        vapi.on("call-start", () => {
+            console.log("Assistant Call Started");
+            toast('call connected...')
+        });
+        vapi.on("speech-start", () => {
+            console.log("Assistant speech started");
+            setActiveUser(false);
+        });
+        vapi.on("speech-end", () => {
+            console.log("Assistant speech Ended");
+            setActiveUser(true);
+        });
+        vapi.on("call-end", () => {
+            console.log("Interview Ended");
+            toast("Interview Ended");
+            generateFeedback();
+        });
 
-    vapi.on("speech-end", () => {
-        console.log("Assistant speech Ended");
-        setActiveUser(true);
-    })
+        return () => {
+            vapi.off("message", handleMessage);
+            vapi.off("call-start", () => console.log("End"));
+            vapi.off("speech-start", () => console.log("End"));
+            vapi.off("speech-end", () => console.log("End"));
+            vapi.off("call-end", () => console.log("End"));
+        };
+    }, []);
 
-    vapi.on("call-end", () => {
-        console.log("Interview Ended");
-        toast("Interview Ended");
-    })
+    const generateFeedback = async () => {
+        const result = await axios.post('/api/ai-feedback', {
+            conversation: conversation
+        });
+
+        const Content = result.data.content;
+        const FinalContent = Content.replace('```json', '').replace('```', '');
+        console.log(FinalContent);
+
+
+
+        const { data, error } = await supabase
+            .from('interview-feedback')
+            .insert([
+                {
+                    userName: interviewInfo?.userName,
+                    userEmail: interviewInfo?.userEmail,
+                    interview_id: interview_id,
+                    feedback: JSON.parse(FinalContent),
+                    recommend: false
+                },
+            ])
+            .select()
+
+        console.log(data);
+        router.replace('/interview/' + interview_id + '/completed');
+
+    }
 
     return (
         <div className='p-20 lg:px-48 xl:px-56' >
